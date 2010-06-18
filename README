@@ -1,4 +1,4 @@
-- Fix a bug/typo bug/typo when lines exceed 100 characters.
+- Fix a bug/typo when lines exceed 100 characters.
 - With the USE_HEADER_ROW option, wrap column names with double quotes because
 there is no way to make sure they are valid identifier.
 - Add support to embedded new lines and escaped double-quotes.
