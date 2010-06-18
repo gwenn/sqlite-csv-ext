@@ -62,6 +62,7 @@ struct CSV {
   int nCol;                    /* Number of columns in current row */
   int maxCol;                  /* Size of aCols array */
   char **aCols;                /* Array of parsed columns */
+  int *aEscapedQuotes;         /* Number of escaped quotes for each column in aCols */
 };
 
 
@@ -122,6 +123,7 @@ static char *csv_getline( CSV *pCSV ){
   int n = 0;
   int bEol = 0;
   int bShrink = 0;
+  int bQuotedCol = 0;
 
   /* allocate initial row buffer */
   if( pCSV->maxRow < 1 ){
@@ -137,6 +139,9 @@ static char *csv_getline( CSV *pCSV ){
     /* grow row buffer as needed */
     if( n+100>pCSV->maxRow ){
       int newSize = pCSV->maxRow*2 + 100;
+      if( newSize>=pCSV->db->aLimit[SQLITE_LIMIT_LENGTH] ){
+        return 0;
+      }
       char *p = sqlite3_realloc(pCSV->zRow, newSize);
       if( !p ) return 0;
       pCSV->maxRow = newSize;
@@ -152,15 +157,28 @@ static char *csv_getline( CSV *pCSV ){
       break;
     }
     /* look for line delimiter */
-    while( pCSV->zRow[n] ){ n++; }
-    if( (n>0) && ((pCSV->zRow[n-1]=='\n') || (pCSV->zRow[n-1]=='\r')) ){
+    while( pCSV->zRow[n] ){
+      if( pCSV->zRow[n]=='\"' ){
+        if( bQuotedCol ) {
+          if( pCSV->zRow[n+1]=='\"' ) { /* escaped */
+            n++;
+          }else{
+            bQuotedCol = 0;
+          }
+        }else if( n==0 || pCSV->zRow[n-1]==pCSV->cDelim ){
+          bQuotedCol = 1;
+        }
+      }
+      n++;
+    }
+    if( (n>0) && ((pCSV->zRow[n-1]=='\n') || (pCSV->zRow[n-1]=='\r')) && !bQuotedCol ){
       pCSV->zRow[n-1] = '\n'; /* uniform line ending */
       pCSV->zRow[n] = '\0';
       bEol = -1;
     }
   }
   if( bShrink ){ 
-    pCSV->zRow = realloc( pCSV->zRow, n+1 ); 
+    pCSV->zRow = sqlite3_realloc( pCSV->zRow, n+1 ); 
     pCSV->maxRow = n+1;
   }
   return bEol ? pCSV->zRow : 0;
@@ -319,11 +337,12 @@ static int csvNext( sqlite3_vtab_cursor* pVtabCursor ){
     /* take a guess */
     int maxCol = (int)(strlen(pCSV->zRow) / 5 + 1);
     pCSV->aCols = (char **)sqlite3_malloc( sizeof(char*) * maxCol );
+    pCSV->aEscapedQuotes = (int *)sqlite3_malloc( sizeof(int) * maxCol );
     if( pCSV->aCols ){
       pCSV->maxCol = maxCol;
     }
   }
-  if( !pCSV->aCols ) return SQLITE_NOMEM;
+  if( !pCSV->aCols || !pCSV->aEscapedQuotes ) return SQLITE_NOMEM;
 
   /* add custom delim character */
   zDelims[0] = pCSV->cDelim;
@@ -334,19 +353,28 @@ static int csvNext( sqlite3_vtab_cursor* pVtabCursor ){
     if( *s=='\"' ){
       s++;  /* skip quote */
       pCSV->aCols[nCol] = s; /* save pointer for this col */
-      /* TBD: handle escaped quotes "" */
+      pCSV->aEscapedQuotes[nCol] = 0;
       /* find closing quote */
-      s = strchr(s, '\"');
-      if( !s ){
-        /* no closing quote */
-        pCSV->eof = -1;
-        return SQLITE_ERROR;
+      while( 1 ){
+        s = strchr(s, '\"');
+        if( !s ){
+          /* no closing quote */
+          pCSV->eof = -1;
+          return SQLITE_ERROR;
+        }else if ( *(s+1)=='\"' ){
+          /* escaped quote */
+          pCSV->aEscapedQuotes[nCol]++;
+          s+=2;
+        }else{
+          break;
+        }
       }
       *s = '\0'; /* null terminate this col */
       /* fall through and look for following ",\n" */
       s++;
     }else{
       pCSV->aCols[nCol] = s; /* save pointer for this col */
+      pCSV->aEscapedQuotes[nCol] = 0;
     }
     s = strpbrk(s, zDelims);
     if( !s ){
@@ -364,6 +392,9 @@ static int csvNext( sqlite3_vtab_cursor* pVtabCursor ){
     s++; /* skip delimiter */
 
     if(nCol >= pCSV->maxCol ){
+      if( nCol>=pCSV->db->aLimit[SQLITE_LIMIT_COLUMN] ){
+        return SQLITE_ERROR;
+      }
       /* we need to grow our col pointer array */
       char **p = (char **)sqlite3_realloc( pCSV->aCols, sizeof(char*) * (nCol+5) );
       if( !p ){
@@ -372,6 +403,12 @@ static int csvNext( sqlite3_vtab_cursor* pVtabCursor ){
       }
       pCSV->maxCol = nCol + 5;
       pCSV->aCols = p;
+      int *p1 = (int *)sqlite3_realloc( pCSV->aEscapedQuotes, sizeof(int) * (nCol+5) );
+      if( !p1 ){
+        /* out of memory */
+        return SQLITE_ERROR;
+      }
+      pCSV->aEscapedQuotes = p1;
     }
 
   }while( *s );
@@ -404,9 +441,34 @@ static int csvColumn(sqlite3_vtab_cursor *pVtabCursor, sqlite3_context *ctx, int
   if( i<0 || i>=pCSV->nCol ){
     sqlite3_result_null( ctx );
   }else{
-    char *col = pCSV->aCols[i];
+    const char *col = pCSV->aCols[i];
     if( !col ){
       sqlite3_result_null( ctx );
+    }else if( pCSV->aEscapedQuotes[i] ){
+      char *z;
+
+      int nByte = (int)(strlen(col) - pCSV->aEscapedQuotes[i]);
+      if( nByte>pCSV->db->aLimit[SQLITE_LIMIT_LENGTH] ){
+        sqlite3_result_error_toobig( ctx );
+        z = 0;
+      }else{
+        z = sqlite3_malloc( nByte );
+        if( !z ){
+          sqlite3_result_error_nomem( ctx );
+        }
+      }
+      if( z ){
+        int j,k;
+        for(j=0, k=0; col[j]; j++){
+          z[k++] = col[j];
+          if( col[j]=='\"' ){
+            /* unescape quote */
+            j++;
+          }
+        }
+        z[k] = 0;
+        sqlite3_result_text( ctx, z, k, sqlite3_free );
+      }
     }else{
       sqlite3_result_text( ctx, col, -1, SQLITE_TRANSIENT );
     }
@@ -475,6 +537,7 @@ static int csvRelease( CSV *pCSV ){
     csv_close( pCSV );
     if( pCSV->zRow ) sqlite3_free( pCSV->zRow );
     if( pCSV->aCols ) sqlite3_free( pCSV->aCols );
+    if( pCSV->aEscapedQuotes ) sqlite3_free( pCSV->aEscapedQuotes );
     sqlite3_free( pCSV );
   }
   return 0;
@@ -541,6 +604,7 @@ static int csvInit(
 
   /* intialize virtual table object */
   memset(pCSV, 0, sizeof(CSV)+nDb+nName+nFile+3);
+  pCSV->db = db;
   pCSV->nBusy = 1;
   pCSV->base.pModule = &csvModule;
   pCSV->cDelim = cDelim;
@@ -610,7 +674,7 @@ static int csvInit(
         csvRelease( pCSV );
         return SQLITE_ERROR;
       }
-      zSql = sqlite3_mprintf("%s%s%s", zTmp, zCol, zTail);
+      zSql = sqlite3_mprintf("%s\"%s\"%s", zTmp, zCol, zTail);
     }else{
       zSql = sqlite3_mprintf("%scol%d%s", zTmp, i+1, zTail);
     }

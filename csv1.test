@@ -25,6 +25,7 @@ source $testdir/tester.tcl
 #   csv-2.*: Linear scans of csv data.
 #   csv-3.*: Test renaming an csv table.
 #   csv-4.*: CREATE errors
+#   csv-5.*: Dirty header, long line, escaped quotes, escaped newlines.
 #
 
 ifcapable !csv {
@@ -38,6 +39,9 @@ set test1csv [file join [file dirname [info script]] test1.csv]
 set test2csv [file join [file dirname [info script]] test2.csv]
 # This file is delimited by '|'.  It does NOT have quoted fields.
 set test3csv [file join [file dirname [info script]] test3.csv]
+# This file contains a dirty header, one long line, escaped quotes, escaped
+# new lines.
+set test4csv [file join [file dirname [info script]] test4.csv]
 
 #----------------------------------------------------------------------------
 # Test cases csv-1.* test CREATE and DROP table statements.
@@ -251,3 +255,38 @@ do_test csv-4.1.2 {
 do_test csv-4.1.3 {
   catchsql " CREATE VIRTUAL TABLE t1 USING csv(foo foo) "
 } {1 {Error opening CSV file: 'foo foo'}}
+
+#----------------------------------------------------------------------------
+# Test cases csv-5.* test file with dirty header and long line.
+#
+
+do_test csv-5.1.1 {
+  execsql " CREATE VIRTUAL TABLE t1 USING csv('$test4csv') "
+  execsql " CREATE VIRTUAL TABLE t2 USING csv('$test4csv', ',', USE_HEADER_ROW) "
+} {}
+do_test csv-5.1.2 {
+  execsql { 
+    SELECT col1 FROM t1 limit 1 offset 1;
+  }
+} {123456789}
+do_test csv-5.1.3 {
+  execsql { 
+    SELECT * FROM t1 limit 1 offset 3;
+  }
+} {{123456789
+} {
+} {} {123456789
+} {1234\\567'89
+} {123456"789
+} {123""456789
+} 1234\"5678\"9 123456789\" {}}
+do_test csv-5.1.4 {
+  execsql { 
+    SELECT col1,col2,col3 FROM t1 limit 1 offset 4;
+  }
+} {{} ' {}}
+do_test csv-5.1.5 {
+  execsql { 
+    SELECT col1 FROM t1 limit 1 offset 5;
+  }
+} {'}
