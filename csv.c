@@ -139,7 +139,7 @@ static char *csv_getline( CSV *pCSV ){
     /* grow row buffer as needed */
     if( n+100>pCSV->maxRow ){
       int newSize = pCSV->maxRow*2 + 100;
-      if( newSize>=pCSV->db->aLimit[SQLITE_LIMIT_LENGTH] ){
+      if( newSize>= sqlite3_limit(pCSV->db, SQLITE_LIMIT_LENGTH, -1) ){
         return 0;
       }
       char *p = sqlite3_realloc(pCSV->zRow, newSize);
@@ -392,7 +392,7 @@ static int csvNext( sqlite3_vtab_cursor* pVtabCursor ){
     s++; /* skip delimiter */
 
     if(nCol >= pCSV->maxCol ){
-      if( nCol>=pCSV->db->aLimit[SQLITE_LIMIT_COLUMN] ){
+      if( nCol>=sqlite3_limit(pCSV->db, SQLITE_LIMIT_COLUMN, -1) ){
         return SQLITE_ERROR;
       }
       /* we need to grow our col pointer array */
@@ -448,7 +448,7 @@ static int csvColumn(sqlite3_vtab_cursor *pVtabCursor, sqlite3_context *ctx, int
       char *z;
 
       int nByte = (int)(strlen(col) - pCSV->aEscapedQuotes[i]);
-      if( nByte>pCSV->db->aLimit[SQLITE_LIMIT_LENGTH] ){
+      if( nByte>sqlite3_limit(pCSV->db, SQLITE_LIMIT_LENGTH, -1) ){
         sqlite3_result_error_toobig( ctx );
         z = 0;
       }else{
