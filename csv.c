@@ -12,18 +12,7 @@
 ** This file contains code for implementations of the CSV
 ** algorithms packaged as an SQLite virtual table module.
 */
-#if defined(_WIN32) || defined(WIN32)
-/* This needs to come before any includes for MSVC compiler */
-#define _CRT_SECURE_NO_WARNINGS
-#endif
-
 #if !defined(SQLITE_CORE) || defined(SQLITE_ENABLE_CSV)
-
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
 
 #ifndef SQLITE_CORE
   #include "sqlite3ext.h"
@@ -32,8 +21,17 @@
   #include "sqlite3.h"
 #endif
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
+#ifndef SQLITE_AMALGAMATION
+#include "csv.h"
+#endif
+
+#ifndef UNUSED_PARAMETER
 #define UNUSED_PARAMETER(x) (void)(x)
+#endif
 
 
 /* 
@@ -132,7 +130,10 @@ static char *csv_getline( CSV *pCSV ){
       pCSV->maxRow = 100;
     }
   }
-  if( !pCSV->zRow ) return 0;
+  if( !pCSV->zRow ) {
+      sqlite3_log(SQLITE_NOMEM, "Error while reading CSV line (1)");
+      return 0;
+  }
 
   /* read until eol */
   while( !bEol ){
@@ -140,10 +141,14 @@ static char *csv_getline( CSV *pCSV ){
     if( n+100>pCSV->maxRow ){
       int newSize = pCSV->maxRow*2 + 100;
       if( newSize>= sqlite3_limit(pCSV->db, SQLITE_LIMIT_LENGTH, -1) ){
+        sqlite3_log(SQLITE_ERROR, "CSV row is too long (> %d)", pCSV->maxRow);
         return 0;
       }
       char *p = sqlite3_realloc(pCSV->zRow, newSize);
-      if( !p ) return 0;
+      if( !p ) {
+        sqlite3_log(SQLITE_NOMEM, "Error while reading CSV line (2)");
+        return 0;
+      }
       pCSV->maxRow = newSize;
       pCSV->zRow = p;
       bShrink = -1;
@@ -447,7 +452,7 @@ static int csvColumn(sqlite3_vtab_cursor *pVtabCursor, sqlite3_context *ctx, int
     }else if( pCSV->aEscapedQuotes[i] ){
       char *z;
 
-      int nByte = (int)(strlen(col) - pCSV->aEscapedQuotes[i]);
+      int nByte = (int)(strlen(col) - pCSV->aEscapedQuotes[i] + 1);
       if( nByte>sqlite3_limit(pCSV->db, SQLITE_LIMIT_LENGTH, -1) ){
         sqlite3_result_error_toobig( ctx );
         z = 0;
