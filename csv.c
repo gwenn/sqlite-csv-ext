@@ -176,10 +176,17 @@ static char *csv_getline( CSV *pCSV ){
       }
       n++;
     }
+    /* uniform line ending */
     if( (n>0) && ((pCSV->zRow[n-1]=='\n') || (pCSV->zRow[n-1]=='\r')) && !bQuotedCol ){
-      pCSV->zRow[n-1] = '\n'; /* uniform line ending */
-      pCSV->zRow[n] = '\0';
-      bEol = -1;
+      if( (n>1) && ((pCSV->zRow[n-1]=='\n') && (pCSV->zRow[n-2]=='\r')) ){
+        pCSV->zRow[n-2] = '\n';
+        pCSV->zRow[n-1] = '\0';
+        bEol = -1;
+      }else{
+        pCSV->zRow[n-1] = '\n';
+        pCSV->zRow[n] = '\0';
+        bEol = -1;
+      }
     }
   }
   if( bShrink ){ 
@@ -387,6 +394,8 @@ static int csvNext( sqlite3_vtab_cursor* pVtabCursor ){
       pCSV->eof = -1;
       return SQLITE_ERROR;
     }
+    // TODO Maybe we should treat empty string as null value (if an option is
+    // activated).
     cDelim = *s;
     /* null terminate the column by overwriting the delimiter */
     *s = '\0';
@@ -446,6 +455,7 @@ static int csvColumn(sqlite3_vtab_cursor *pVtabCursor, sqlite3_context *ctx, int
   if( i<0 || i>=pCSV->nCol ){
     sqlite3_result_null( ctx );
   }else{
+    // TODO SQLite uses dynamic typing...
     const char *col = pCSV->aCols[i];
     if( !col ){
       sqlite3_result_null( ctx );
