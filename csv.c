@@ -482,10 +482,10 @@ static int csvColumn(sqlite3_vtab_cursor *pVtabCursor, sqlite3_context *ctx, int
           }
         }
         z[k] = 0;
-        sqlite3_result_text( ctx, z, k, sqlite3_free );
+        sqlite3_result_text( ctx, z, k, sqlite3_free ); // FIXME sqlite3_result_int64/double
       }
     }else{
-      sqlite3_result_text( ctx, col, -1, SQLITE_TRANSIENT );
+      sqlite3_result_text( ctx, col, -1, SQLITE_TRANSIENT ); // FIXME sqlite3_result_int64/double
     }
   }
 
@@ -569,6 +569,10 @@ static int csvRelease( CSV *pCSV ){
 **   argv[3]   -> csv file name
 **   argv[4]   -> custom delimiter
 **   argv[5]   -> optional:  use header row for column names
+**
+** TODO
+**   File encoding problem
+**   Column/Cell type (in declaration and in result)
 */
 static int csvInit(
   sqlite3 *db,                        /* Database connection */
@@ -689,9 +693,9 @@ static int csvInit(
         csvRelease( pCSV );
         return SQLITE_ERROR;
       }
-      zSql = sqlite3_mprintf("%s\"%s\"%s", zTmp, zCol, zTail);
+      zSql = sqlite3_mprintf("%s\"%s\"%s", zTmp, zCol, zTail); // FIXME Column type (INT/REAL/TEXT)
     }else{
-      zSql = sqlite3_mprintf("%scol%d%s", zTmp, i+1, zTail);
+      zSql = sqlite3_mprintf("%scol%d%s", zTmp, i+1, zTail); // FIXME Column type (INT/REAL/TEXT)
     }
     sqlite3_free(zTmp);
   }
